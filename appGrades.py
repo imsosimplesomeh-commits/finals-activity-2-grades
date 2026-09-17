@@ -1,17 +1,21 @@
+import os
 import tkinter as tk
 from tkinter import messagebox, ttk
 from dataclasses import dataclass, field
 
-try:
-    from brevo_client import send_brevo_email
-except ImportError:
-    def send_brevo_email(recipient: str, body: str, subject: str = "") -> str:
-        raise RuntimeError("brevo_client module not found — email sending is unavailable.")
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 GRADES_FILE = "ruina_grades.txt"
 RECORD_MARK = "=="
 
-# Palette — Library of Ruina
+BREVO_API_KEY = os.getenv("BREVO_API_KEY")
+SENDER_EMAIL = os.getenv("SENDER_EMAIL")
+SENDER_NAME = os.getenv("SENDER_NAME", "Library of Ruina Notification Console")
+BREVO_URL = "https://api.brevo.com/v3/smtp/email"
+
 VOID       = "#0B0C10"
 PANEL      = "#13161E"
 LINE       = "#2A2F3D"
@@ -33,11 +37,15 @@ FONT_BTN        = ("Georgia", 9, "bold")
 
 
 # ==============================================================================
-# DATA LAYER
+# DATA / DOMAIN LAYER
 # ==============================================================================
 
 @dataclass
 class Grade:
+    """Bundles the four raw facts about one course with the one
+    calculation that depends on them. grade_points is written once
+    here and reused everywhere else instead of retyping units * grade."""
+
     course_code:  str
     course_title: str
     units:        float
@@ -51,6 +59,7 @@ class Grade:
 
     @property
     def grade_points(self) -> float:
+        """Depends only on this Grade's own units and grade fields."""
         return self.units * self.grade
 
     def as_row(self) -> tuple:
@@ -62,6 +71,10 @@ class Grade:
 
 @dataclass
 class Student:
+    """One patron's header info plus their list of Grade instances.
+    Composition, not inheritance — a Student HAS Grade instances,
+    it is not a kind of Grade."""
+
     student_id:   str = ""
     student_name: str = ""
     course_year:  str = ""
@@ -79,16 +92,9 @@ class Student:
             label = f"[{self.student_id}] {label}"
         return label
 
-    def total_units(self) -> float:
-        return sum(s.units for s in self.subjects)
-
-    def weighted_average(self) -> float:
-        total = self.total_units()
-        if total == 0:
-            return 0.0
-        return round(sum(s.grade_points for s in self.subjects) / total, 2)
-
     def report_html(self) -> str:
+        """HTML variant of the report, used for the styled email body."""
+        total_units, weighted_average = compute_summary(self.subjects)
         rows = "\n".join(
             f'<tr>'
             f'<td style="padding:8px 12px;border:1px solid #1E3A5F;">{s.course_code}</td>'
@@ -112,19 +118,100 @@ class Student:
     </tr></thead>
     <tbody>{rows}</tbody>
   </table>
-  <p style="margin-top:16px;"><b>Total Units:</b> {self.total_units():g}</p>
-  <p><b>Weighted Average:</b> {self.weighted_average():.2f}</p>
+  <p style="margin-top:16px;"><b>Total Units:</b> {total_units:g}</p>
+  <p><b>Weighted Average:</b> {weighted_average:.2f}</p>
 </div>
 """.strip()
 
 
+def load_grades(path: str = GRADES_FILE) -> list:
+    """The only place in this program that opens grades.txt.
+
+    Supports one OR many students per file: a line starting with '=='
+    begins a new student (pipe-separated id | name | course_year);
+    every following comma-separated 4-field line is a course for the
+    most recently started student. Malformed lines are skipped and
+    counted, not fatal.
+
+    Returns a list of (student_name, course_year, grades, skipped)
+    tuples — one entry per student found. For a single-student file
+    this list has exactly one entry.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw_lines = [line.strip() for line in f if line.strip()]
+    except FileNotFoundError:
+        return []
+    if not raw_lines:
+        return []
+
+    results = []
+    current_name = ""
+    current_year = ""
+    current_grades: list = []
+    current_skipped = 0
+    started = False
+
+    def flush():
+        if started:
+            results.append((current_name, current_year, current_grades, current_skipped))
+
+    for line in raw_lines:
+        if line.startswith(RECORD_MARK):
+            flush()
+            header = line[len(RECORD_MARK):].strip()
+            parts = [p.strip() for p in header.split("|")]
+            if len(parts) >= 3:
+                _sid, name, year = parts[0], parts[1], parts[2]
+            else:
+                name, year = (parts[0] if parts else ""), ""
+            current_name, current_year = name, year
+            current_grades, current_skipped = [], 0
+            started = True
+            continue
+        if not started:
+            current_skipped += 1
+            continue
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) != 4:
+            current_skipped += 1
+            continue
+        code, name, units, grade = parts
+        try:
+            current_grades.append(Grade(code, name, float(units), float(grade)))
+        except ValueError:
+            current_skipped += 1
+
+    flush()
+    return results
+
+
+def compute_summary(grades: list) -> tuple:
+    """Sums units and grade_points across the list.
+
+    Returns (total_units, weighted_average). Average is 0.0 if total
+    units is zero, so callers never divide by zero.
+    """
+    total_units = sum(g.units for g in grades)
+    if total_units == 0:
+        return 0.0, 0.0
+    weighted_sum = sum(g.grade_points for g in grades)
+    return total_units, round(weighted_sum / total_units, 2)
+
+
 def honors_status(average: float) -> str:
+    """Pure function: no tkinter import, no Grade dependency.
+    Lower is better on this scale."""
     if average <= 1.75:
         return "With Honors"
     return "Regular"
 
 
 class GradeManager:
+    """Multi-student wrapper around load_grades()/compute_summary().
+    It calls those two functions rather than re-implementing parsing
+    or math itself — this is the only place they are called from."""
+
     def __init__(self) -> None:
         self.students:      list = []
         self.active_index:  int  = -1
@@ -141,47 +228,29 @@ class GradeManager:
         return self.active.subjects if self.active else []
 
     def total_units(self) -> float:
-        return self.active.total_units() if self.active else 0.0
+        if self.active is None:
+            return 0.0
+        total_units, _ = compute_summary(self.active.subjects)
+        return total_units
 
     def weighted_average(self) -> float:
-        return self.active.weighted_average() if self.active else 0.0
+        if self.active is None:
+            return 0.0
+        _, weighted_average = compute_summary(self.active.subjects)
+        return weighted_average
 
     def load(self, path: str = GRADES_FILE) -> None:
+        """Delegates all file I/O and parsing to load_grades(); this
+        method only turns the result into Student objects."""
         self.students.clear()
         self.skipped_lines = 0
-        self.active_index  = -1
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                raw_lines = [line.strip() for line in f if line.strip()]
-        except FileNotFoundError:
-            return
-        if not raw_lines:
-            return
+        self.active_index = -1
 
-        current = None
-        for line in raw_lines:
-            if line.startswith(RECORD_MARK):
-                header = line[len(RECORD_MARK):].strip()
-                parts  = [p.strip() for p in header.split("|")]
-                if len(parts) >= 3:
-                    sid, name, year = parts[0], parts[1], parts[2]
-                else:
-                    sid, name, year = "", parts[0] if parts else "", ""
-                current = Student(student_id=sid, student_name=name, course_year=year)
-                self.students.append(current)
-                continue
-            if current is None:
-                self.skipped_lines += 1
-                continue
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) != 4:
-                self.skipped_lines += 1
-                continue
-            code, name, units, grade = parts
-            try:
-                current.subjects.append(Grade(code, name, float(units), float(grade)))
-            except ValueError:
-                self.skipped_lines += 1
+        records = load_grades(path)
+        for name, year, grades, skipped in records:
+            self.students.append(Student(student_id="", student_name=name,
+                                          course_year=year, subjects=grades))
+            self.skipped_lines += skipped
 
         if self.students:
             self.active_index = 0
@@ -253,6 +322,72 @@ class GradeManager:
         student = self._require_active()
         if 0 <= index < len(student.subjects):
             student.subjects.pop(index)
+
+
+# ==============================================================================
+# INTEGRATION LAYER — Brevo API only
+# ==============================================================================
+
+def build_report_text(student_name: str, course_year: str, grades: list,
+                       total_units: float, weighted_average: float,
+                       honors: str) -> str:
+    """Fixed-width, monospace-aligned plain-text report — the email
+    body alternative to Student.report_html(). Pure formatting: no
+    file I/O, no network calls, no tkinter."""
+    lines = [
+        "LIBRARY OF RUINA — PATRON GRADE RECORD",
+        f"Patron: {student_name}",
+        f"Program & Year: {course_year}",
+        "",
+        f"{'Code':<14}{'Title':<32}{'Units':>7}{'Grade':>7}",
+        "-" * 60,
+    ]
+    for g in grades:
+        lines.append(f"{g.course_code:<14}{g.course_title:<32}{g.units:>7.2f}{g.grade:>7.2f}")
+    lines.append("-" * 60)
+    lines.append(f"Total Units: {total_units:g}")
+    lines.append(f"Weighted Average: {weighted_average:.2f}")
+    lines.append(f"Honors Status: {honors}")
+    return "\n".join(lines)
+
+
+def send_brevo_email(recipient: str, body: str, subject: str = "") -> str:
+    """The only place in this program that makes a network request.
+    Raises RuntimeError with a specific message for each failure mode:
+    missing key, unauthorized, timeout, or connection failure."""
+    if not BREVO_API_KEY or not SENDER_EMAIL:
+        raise RuntimeError("Missing BREVO_API_KEY or SENDER_EMAIL. Check your .env file.")
+
+    stripped = body.strip()
+    html_content = stripped if stripped.startswith("<") else f"<pre>{body}</pre>"
+
+    payload = {
+        "sender": {"name": SENDER_NAME, "email": SENDER_EMAIL},
+        "to": [{"email": recipient}],
+        "subject": subject or "Library of Ruina Notification",
+        "htmlContent": html_content,
+    }
+    headers = {
+        "accept": "application/json",
+        "api-key": BREVO_API_KEY,
+        "content-type": "application/json",
+    }
+
+    try:
+        response = requests.post(BREVO_URL, json=payload, headers=headers, timeout=15)
+    except requests.exceptions.Timeout:
+        raise RuntimeError(f"Request to Brevo timed out while sending to {recipient}.")
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError(f"Could not connect to Brevo while sending to {recipient}.")
+
+    if response.status_code == 401:
+        raise RuntimeError("Brevo rejected the API key (unauthorized).")
+    if response.status_code == 403:
+        raise RuntimeError("Brevo rejected the request (unauthorized IP for this key).")
+    response.raise_for_status()
+
+    message_id = response.json().get("messageId", "unknown-id")
+    return f"BREVO EMAIL -> sent to {recipient} (<{message_id}>)"
 
 
 # ==============================================================================
@@ -478,6 +613,9 @@ class AddPatronDialog(tk.Toplevel):
 
 
 class GradeReportApp(tk.Frame):
+    """Calls GradeManager (which itself calls load_grades()/
+    compute_summary()) and never opens a file or does math directly."""
+
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master, bg=VOID)
         self.manager = GradeManager()
@@ -582,7 +720,7 @@ class GradeReportApp(tk.Frame):
                       bg=VOID, fg=MUTED).pack(side="left", padx=(8, 0))
         styled_button(actions, "REMOVE SELECTED",        self.on_remove,
                       bg=VOID, fg=MUTED).pack(side="left", padx=(8, 0))
-        styled_button(actions, "RELOAD ruina_grades.txt", self.on_reload,
+        styled_button(actions, f"RELOAD {GRADES_FILE}", self.on_reload,
                       bg=VOID, fg=MUTED).pack(side="left", padx=(8, 0))
 
     def _build_email_section(self) -> None:
@@ -656,6 +794,8 @@ class GradeReportApp(tk.Frame):
         return self.tree.index(sel[0])
 
     def on_reload(self) -> None:
+        """Calls GradeManager.load() (which itself calls load_grades())
+        exactly once. Does no parsing here."""
         self.manager.load()
         self.refresh_all()
         if self.manager.skipped_lines:
@@ -733,6 +873,8 @@ class GradeReportApp(tk.Frame):
         self.write(f"ARCHIVED -> {s.course_code} ({s.course_title})")
 
     def on_send(self) -> None:
+        """Calls send_brevo_email() and handles the exceptions it raises.
+        Does not touch the file."""
         recipient = self.recipient_var.get().strip()
         if not recipient:
             messagebox.showwarning("Missing recipient", "Enter an email recipient first.")
