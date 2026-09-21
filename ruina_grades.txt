@@ -1,25 +1,25 @@
-== 2024387 | Stefan Zuri F. Modelo | BSCS 2
+==  | Stefan Zuri F. Modelo | BSCS 2
 SSPE, Gender Studies, 3, 1.5
 CSPC 102-CS2, Discrete Structures 2, 5, 2.5
 CSCC 103-CS2, OOP, 3, 2.0
 CSCC 104-CS2, Data Structures 2, 3, 2.5
-== 0001 | Brenda M. Balala | BSCS 2
-CSCC 102, Fundamentals of Programming, 3, 1.0
-== 2025805 | Keinth Patrick D. Morillo | BSCS 2
+==  | Brenda M. Balala | BSCS 2
+CSCC 102, Fundamentals of Programming, 4, 1.0
+==  | Keinth Patrick D. Morillo | BSCS 2
 CSCC 102, Data Structures, 3, 1.25
-CSCC 103, Object-Oriented Programming, 3, 1.00
-CSMATH 2, Trigonometry I, 3, 1.50
-PATHFIT 2, Physical Education, 3, 1.00
+CSCC 103, Object-Oriented Programming, 3, 1.0
+CSMATH 2, Trigonometry I, 3, 1.5
+PATHFIT 2, Physical Education, 3, 1.0
 AH 111, Purposive Communication, 3, 2.75
-== | Precious Anne E. Parone | BSCS 2
+==  | Precious Anne E. Parone | BSCS 2
 CSCC 102, Data Structures, 3, 2.25
-CSCC 103, Object-Oriented Programming, 3, 2.00
+CSCC 103, Object-Oriented Programming, 3, 2.0
 CSMATH 2, Trigonometry I, 3, 2.75
-PATHFIT 2, Physical Education, 3, 1.00
-AH 111, Purposive Communication, 3, 2.00
-== | Paul Nino Catubig | BSCS 2
+PATHFIT 2, Physical Education, 3, 1.0
+AH 111, Purposive Communication, 3, 2.0
+==  | Paul Nino Catubig | BSCS 2
 CSCC 102, Data Structures, 3, 1.75
-CSCC 103, Object-Oriented Programming, 3, 1.50
-CSMATH 2, Trigonometry I, 3, 2.00
-PATHFIT 2, Physical Education, 3, 1.00
+CSCC 103, Object-Oriented Programming, 3, 1.5
+CSMATH 2, Trigonometry I, 3, 2.0
+PATHFIT 2, Physical Education, 3, 1.0
 AH 111, Purposive Communication, 3, 1.25
