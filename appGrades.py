@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+GRADES_FILE = "grades.txt"
 GRADES_FILE = "ruina_grades.txt"
 RECORD_MARK = "=="
 
@@ -124,67 +125,48 @@ class Student:
 """.strip()
 
 
-def load_grades(path: str = GRADES_FILE) -> list:
-    """The only place in this program that opens grades.txt.
-
-    Supports one OR many students per file: a line starting with '=='
-    begins a new student (pipe-separated id | name | course_year);
-    every following comma-separated 4-field line is a course for the
-    most recently started student. Malformed lines are skipped and
-    counted, not fatal.
-
-    Returns a list of (student_name, course_year, grades, skipped)
-    tuples — one entry per student found. For a single-student file
-    this list has exactly one entry.
-    """
+def load_grades(path: str) -> list:
+    """Reads the file and returns a list of records for multiple students."""
+    records = []
     try:
         with open(path, "r", encoding="utf-8") as f:
-            raw_lines = [line.strip() for line in f if line.strip()]
+            lines = [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        return []
-    if not raw_lines:
-        return []
+        return records
 
-    results = []
-    current_name = ""
-    current_year = ""
-    current_grades: list = []
-    current_skipped = 0
-    started = False
+    current_id, current_name, current_year = "", "Unknown", "Unknown"
+    current_grades = []
+    skipped = 0
 
-    def flush():
-        if started:
-            results.append((current_name, current_year, current_grades, current_skipped))
-
-    for line in raw_lines:
-        if line.startswith(RECORD_MARK):
-            flush()
-            header = line[len(RECORD_MARK):].strip()
-            parts = [p.strip() for p in header.split("|")]
-            if len(parts) >= 3:
-                _sid, name, year = parts[0], parts[1], parts[2]
+    for line in lines:
+        if line.startswith("=="):
+            # Save the previous student to the records list before starting a new one
+            if current_name != "Unknown" or current_grades:
+                records.append((current_id, current_name, current_year, current_grades, skipped))
+                current_grades = []
+                skipped = 0
+            
+            # Parse the new student's header: "== ID | Name | Year"
+            header = line[2:].split("|")
+            current_id = header[0].strip() if len(header) > 0 else ""
+            current_name = header[1].strip() if len(header) > 1 else "Unknown"
+            current_year = header[2].strip() if len(header) > 2 else "Unknown"
+        else:
+            # Parse course lines
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) == 4:
+                try:
+                    current_grades.append(Grade(parts[0], parts[1], float(parts[2]), float(parts[3])))
+                except ValueError:
+                    skipped += 1
             else:
-                name, year = (parts[0] if parts else ""), ""
-            current_name, current_year = name, year
-            current_grades, current_skipped = [], 0
-            started = True
-            continue
-        if not started:
-            current_skipped += 1
-            continue
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) != 4:
-            current_skipped += 1
-            continue
-        code, name, units, grade = parts
-        try:
-            current_grades.append(Grade(code, name, float(units), float(grade)))
-        except ValueError:
-            current_skipped += 1
+                skipped += 1
 
-    flush()
-    return results
+    # Append the very last student in the file
+    if current_name != "Unknown" or current_grades:
+        records.append((current_id, current_name, current_year, current_grades, skipped))
 
+    return records
 
 def compute_summary(grades: list) -> tuple:
     """Sums units and grade_points across the list.
@@ -247,7 +229,23 @@ class GradeManager:
         self.active_index = -1
 
         records = load_grades(path)
-        for name, year, grades, skipped in records:
+        
+        # FIX: We now unpack 5 values by adding 'sid' to the front
+        for sid, name, year, grades, skipped in records:
+            self.students.append(Student(student_id=sid, student_name=name,
+                                          course_year=year, subjects=grades))
+            self.skipped_lines += skipped
+
+        if self.students:
+            self.active_index = 0
+        """Delegates all file I/O and parsing to load_grades(); this
+        method only turns the result into Student objects."""
+        self.students.clear()
+        self.skipped_lines = 0
+        self.active_index = -1
+
+        records = load_grades(path)
+        for sid, name, year, grades, skipped in records:
             self.students.append(Student(student_id="", student_name=name,
                                           course_year=year, subjects=grades))
             self.skipped_lines += skipped

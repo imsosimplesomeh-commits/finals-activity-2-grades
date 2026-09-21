@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import messagebox, ttk
 from dataclasses import dataclass, field
@@ -12,8 +13,6 @@ GRADES_FILE = "limbus_grades.txt"
 RECORD_MARK = "=="
 
 # ------------------------------ palette ------------------------------
-# Limbus Company: black-and-crimson corporate menace, sharp white
-# accents like a ledger stamped in blood-red ink.
 VOID = "#0C0A0D"
 PANEL = "#1A1518"
 LINE = "#3D2229"
@@ -31,7 +30,6 @@ FONT_VALUE = ("Georgia", 11, "bold")
 FONT_MONO = ("Consolas", 10)
 FONT_MONO_SMALL = ("Consolas", 9)
 FONT_BTN = ("Georgia", 9, "bold")
-
 
 # ==============================================================================
 # DATA LAYER
@@ -90,19 +88,26 @@ class Student:
         weighted_sum = sum(s.grade_points for s in self.subjects)
         return round(weighted_sum / total, 2)
 
-    def report_html(self) -> str:
-        rows = "\n".join(
-            f'<tr><td style="padding:8px 12px;border:1px solid #9E1B32;">{s.course_code}</td>'
-            f'<td style="padding:8px 12px;border:1px solid #9E1B32;">{s.course_title}</td>'
-            f'<td style="padding:8px 12px;border:1px solid #9E1B32;text-align:center;">{s.units:g}</td>'
-            f'<td style="padding:8px 12px;border:1px solid #9E1B32;text-align:center;">{s.grade:.2f}</td></tr>'
-            for s in self.subjects
-        )
-        return f"""
+
+def honors_status(average: float) -> str:
+    if average <= 1.75:
+        return "With Honors"
+    return "Regular"
+
+
+def build_report_html(student: Student) -> str:
+    rows = "\n".join(
+        f'<tr><td style="padding:8px 12px;border:1px solid #9E1B32;">{s.course_code}</td>'
+        f'<td style="padding:8px 12px;border:1px solid #9E1B32;">{s.course_title}</td>'
+        f'<td style="padding:8px 12px;border:1px solid #9E1B32;text-align:center;">{s.units:g}</td>'
+        f'<td style="padding:8px 12px;border:1px solid #9E1B32;text-align:center;">{s.grade:.2f}</td></tr>'
+        for s in student.subjects
+    )
+    return f"""
 <div style="font-family:Georgia,serif;color:#0C0A0D;background:#E9E4DD;padding:20px;border:2px solid #9E1B32;">
   <h2 style="color:#9E1B32;margin-bottom:4px;">LIMBUS COMPANY — PERSONNEL GRADE FILE</h2>
-  <p style="margin:4px 0;"><b>Student:</b> {self.student_name}</p>
-  <p style="margin:4px 0 16px;"><b>Program &amp; Year:</b> {self.course_year}</p>
+  <p style="margin:4px 0;"><b>Student:</b> {student.student_name}</p>
+  <p style="margin:4px 0 16px;"><b>Program &amp; Year:</b> {student.course_year}</p>
   <table style="border-collapse:collapse;width:100%;">
     <thead><tr style="background:#9E1B32;color:#E9E4DD;">
       <th style="padding:8px 12px;">Course Code</th><th style="padding:8px 12px;">Course Title</th>
@@ -110,23 +115,13 @@ class Student:
     </tr></thead>
     <tbody>{rows}</tbody>
   </table>
-  <p style="margin-top:16px;"><b>Total Units:</b> {self.total_units():g}</p>
-  <p><b>Weighted Average:</b> {self.weighted_average():.2f}</p>
+  <p style="margin-top:16px;"><b>Total Units:</b> {student.total_units():g}</p>
+  <p><b>Weighted Average:</b> {student.weighted_average():.2f}</p>
 </div>
 """.strip()
 
 
-def honors_status(average: float) -> str:
-    """Pure function, no tkinter/Student dependency. Lower is better."""
-    if average <= 1.75:
-        return "With Honors"
-    return "Regular"
-
-
 class GradeManager:
-    """Holds every student record loaded from limbus_grades.txt, plus
-    full CRUD for students and their subjects."""
-
     def __init__(self) -> None:
         self.students: list[Student] = []
         self.active_index: int = -1
@@ -152,13 +147,12 @@ class GradeManager:
         self.students.clear()
         self.skipped_lines = 0
         self.active_index = -1
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                raw_lines = [line.strip() for line in f if line.strip()]
-        except FileNotFoundError:
+        
+        if not os.path.exists(path):
             return
-        if not raw_lines:
-            return
+            
+        with open(path, "r", encoding="utf-8") as f:
+            raw_lines = [line.strip() for line in f if line.strip()]
 
         current = None
         for line in raw_lines:
@@ -172,13 +166,16 @@ class GradeManager:
                 current = Student(student_id=sid, student_name=name, course_year=year)
                 self.students.append(current)
                 continue
+                
             if current is None:
                 self.skipped_lines += 1
                 continue
+                
             parts = [p.strip() for p in line.split(",")]
             if len(parts) != 4:
                 self.skipped_lines += 1
                 continue
+                
             code, name, units, grade = parts
             try:
                 current.subjects.append(Grade(code, name, float(units), float(grade)))
@@ -195,15 +192,10 @@ class GradeManager:
                 for s in student.subjects:
                     f.write(s.as_line() + "\n")
 
-    # ------------------------- student management -------------------------
-
-    def add_student(self, student_id: str, name: str, course_year: str,
-                     initial_subjects=None) -> None:
+    def add_student(self, student_id: str, name: str, course_year: str, initial_subjects=None) -> None:
         student_id, name, course_year = student_id.strip(), name.strip(), course_year.strip()
-        if not student_id:
-            raise ValueError("Student ID is required.")
-        if not name:
-            raise ValueError("Student name is required.")
+        if not student_id or not name:
+            raise ValueError("Student ID and name are required.")
         if any(s.key == student_id for s in self.students):
             raise ValueError(f"A student with ID '{student_id}' already exists.")
         student = Student(student_id=student_id, student_name=name, course_year=course_year,
@@ -224,11 +216,9 @@ class GradeManager:
     def student_labels(self) -> list:
         return [s.display_name() for s in self.students]
 
-    # ------------------------- subject editing (active student) -------------------------
-
     def _require_active(self) -> Student:
         if self.active is None:
-            raise ValueError("No student selected. Add a student first.")
+            raise IndexError("No active student record.")
         return self.active
 
     def add_subject(self, code: str, name: str, units: float, grade: float) -> None:
@@ -265,8 +255,7 @@ class GradeManager:
 # PRESENTATION LAYER
 # ==============================================================================
 
-def styled_button(parent, text, command, *, bg, fg, hover_bg=None, font=FONT_MONO_SMALL,
-                   border=None, **pack_kwargs):
+def styled_button(parent, text, command, *, bg, fg, hover_bg=None, font=FONT_MONO_SMALL, border=None):
     btn = tk.Button(
         parent, text=text, command=command, font=font, bg=bg, fg=fg,
         activebackground=hover_bg or bg, activeforeground=fg,
@@ -333,8 +322,6 @@ class SubjectDialog(tk.Toplevel):
 
 
 class AddStudentDialog(tk.Toplevel):
-    """Add New Student: identity fields plus a staged course list."""
-
     def __init__(self, master, *, on_create):
         super().__init__(master, bg=PANEL)
         self.title("Add New Student")
@@ -464,9 +451,6 @@ class AddStudentDialog(tk.Toplevel):
 
 
 class GradeReportApp(tk.Frame):
-    """Limbus Company console — full CRUD over multiple student
-    ('student') records: add/remove students, add/edit/remove subjects."""
-
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master, bg=VOID)
         self.manager = GradeManager()
@@ -587,8 +571,6 @@ class GradeReportApp(tk.Frame):
                             highlightbackground=LINE, state="disabled")
         self.log.pack(fill="x")
 
-    # -------------------------- data refresh --------------------------
-
     def refresh_combo(self) -> None:
         self.student_combo["values"] = self.manager.student_labels()
         if self.manager.active is not None:
@@ -635,8 +617,6 @@ class GradeReportApp(tk.Frame):
         self.refresh_info()
         self.refresh_table()
 
-    # -------------------------- student CRUD --------------------------
-
     def on_add_student(self) -> None:
         def create(student_id, name, program, subjects):
             self.manager.add_student(student_id, name, program, subjects)
@@ -657,8 +637,6 @@ class GradeReportApp(tk.Frame):
         self.manager.save()
         self.refresh_all()
         self.write(f"REMOVED STUDENT -> [{s.student_id}] {s.student_name}")
-
-    # -------------------------- subject CRUD --------------------------
 
     def on_add(self) -> None:
         def submit(code, name, units, grade):
@@ -701,26 +679,28 @@ class GradeReportApp(tk.Frame):
         self.refresh_info()
         self.write(f"REMOVED -> {s.course_code} ({s.course_title})")
 
-    # -------------------------- email + log --------------------------
-
     def on_send(self) -> None:
         recipient = self.recipient_var.get().strip()
         if not recipient:
             messagebox.showwarning("Missing recipient", "Enter an email recipient first.")
             return
+            
         if self.manager.active is None or not self.manager.subjects:
             messagebox.showwarning("Nothing to send", "Select a student with at least one subject first.")
             return
+            
         try:
+            html_body = build_report_html(self.manager.active)
             line = send_brevo_email(
                 recipient,
-                self.manager.active.report_html(),
-                subject=f"Limbus Company Grade Report — {self.manager.student_name if self.manager.active else 'Student'}",
+                html_body,
+                subject=f"Limbus Company Grade Report — {self.manager.active.student_name}",
             )
         except Exception as exc:
             self.write(f"FAILED -> {recipient}: {exc}")
             messagebox.showerror("Email failed", str(exc))
             return
+            
         self.write(line)
 
     def on_clear(self) -> None:
